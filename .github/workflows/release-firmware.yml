@@ -1,0 +1,119 @@
+name: Build and Release Firmware
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  repository_dispatch:
+    types: [build-firmware]
+    inputs:
+      version:
+        required: false
+        type: string
+      commit_sha:
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Checkout code (OTA repo)
+        uses: actions/checkout@v4
+
+      - name: Checkout source code (private OmniCAN repo)
+        uses: actions/checkout@v4
+        with:
+          repository: BowerMotorsport/OmniCAN
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+          ref: ${{ github.event.inputs.commit_sha || github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v1
+
+      - name: Install ESP32 board support
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Install NimBLE library
+        run: |
+          arduino-cli lib install "NimBLE-Arduino"
+
+      - name: Build firmware
+        run: |
+          cd source/OmniCan_Gateway
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,PartitionScheme=min_spiffs \
+            --output-dir ../../build \
+            OmniCan_Gateway.ino
+
+      - name: Get version from tag or input
+        id: version
+        run: |
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Rename firmware binary
+        run: |
+          mv build/OmniCan_Gateway.ino.bin build/firmware_v${{ steps.version.outputs.VERSION }}.bin
+
+      - name: Calculate SHA256
+        id: sha256
+        run: |
+          SHA=$(sha256sum build/firmware_v${{ steps.version.outputs.VERSION }}.bin | cut -d ' ' -f 1)
+          SIZE=$(stat -c%s build/firmware_v${{ steps.version.outputs.VERSION }}.bin)
+          echo "SHA256=$SHA" >> $GITHUB_OUTPUT
+          echo "SIZE=$SIZE" >> $GITHUB_OUTPUT
+
+      - name: Create manifest.json
+        run: |
+          cat > build/manifest.json << EOF
+          {
+            "latest": {
+              "version": "${{ steps.version.outputs.VERSION }}",
+              "download_url": "https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/firmware_v${{ steps.version.outputs.VERSION }}.bin",
+              "sha256": "${{ steps.sha256.outputs.SHA256 }}",
+              "size": ${{ steps.sha256.outputs.SIZE }},
+              "release_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "release_notes": "Firmware version ${{ steps.version.outputs.VERSION }}"
+            }
+          }
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            build/firmware_v${{ steps.version.outputs.VERSION }}.bin
+            build/manifest.json
+          body: |
+            ## Firmware v${{ steps.version.outputs.VERSION }}
+
+            **SHA256:** `${{ steps.sha256.outputs.SHA256 }}`
+            **Size:** ${{ steps.sha256.outputs.SIZE }} bytes
+
+            ### Installation
+            1. Open the OmniCAN app
+            2. Go to Settings > Gateway
+            3. Tap "Check for Updates"
+            4. Install the update
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
