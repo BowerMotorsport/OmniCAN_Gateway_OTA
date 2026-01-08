@@ -70,14 +70,6 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "Building version: $VERSION"
 
-      - name: Create tag
-        run: |
-          git tag v${{ steps.version.outputs.VERSION }}
-
-      - name: Push tag
-        run: |
-          git push origin v${{ steps.version.outputs.VERSION }}
-
       - name: Rename firmware binary
         run: |
           mv build/OmniCan_Gateway.ino.bin build/firmware_v${{ steps.version.outputs.VERSION }}.bin
@@ -105,23 +97,57 @@ jobs:
           }
           EOF
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+      - name: Create GitHub Release (with tag)
+        uses: actions/github-script@v7
         with:
-          files: |
-            build/firmware_v${{ steps.version.outputs.VERSION }}.bin
-            build/manifest.json
-          body: |
-            ## Firmware v${{ steps.version.outputs.VERSION }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
 
-            **SHA256:** `${{ steps.sha256.outputs.SHA256 }}`
-            **Size:** ${{ steps.sha256.outputs.SIZE }} bytes
+            const version = '${{ steps.version.outputs.VERSION }}';
+            const tag = 'v' + version;
+            const sha256 = '${{ steps.sha256.outputs.SHA256 }}';
+            const size = '${{ steps.sha256.outputs.SIZE }}';
 
-            ### Installation
-            1. Open the OmniCAN app
-            2. Go to Settings > Gateway
-            3. Tap "Check for Updates"
-            4. Install the update
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            const releaseBody = '## Firmware v' + version + '\n\n**SHA256:** `' + sha256 + '`\n**Size:** ' + size + ' bytes\n\n### Installation\n1. Open the OmniCAN app\n2. Go to Settings > Gateway\n3. Tap "Check for Updates"\n4. Install the update';
+
+            const firmwarePath = path.resolve(process.cwd(), 'build', 'firmware_v' + version + '.bin');
+            const manifestPath = path.resolve(process.cwd(), 'build', 'manifest.json');
+
+            const firmwareContent = fs.readFileSync(firmwarePath);
+            const manifestContent = fs.readFileSync(manifestPath);
+
+            const { data: release } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: 'v' + version,
+              body: releaseBody,
+              draft: false,
+              prerelease: false,
+              generate_release_notes: false,
+            });
+
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: 'firmware_v' + version + '.bin',
+              data: firmwareContent,
+              headers: {
+                'Content-Type': 'application/octet-stream',
+              },
+            });
+
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: 'manifest.json',
+              data: manifestContent,
+              headers: {
+                'Content-Type': 'application/json',
+              },
+            });
+
+            console.log('Release created: ' + release.html_url);
