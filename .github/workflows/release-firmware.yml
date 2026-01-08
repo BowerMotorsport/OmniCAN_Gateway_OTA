@@ -70,6 +70,14 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "Building version: $VERSION"
 
+      - name: Create tag
+        run: |
+          git tag v${{ steps.version.outputs.VERSION }}
+
+      - name: Push tag
+        run: |
+          git push origin v${{ steps.version.outputs.VERSION }}
+
       - name: Rename firmware binary
         run: |
           mv build/OmniCan_Gateway.ino.bin build/firmware_v${{ steps.version.outputs.VERSION }}.bin
