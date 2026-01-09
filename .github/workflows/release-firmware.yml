@@ -32,13 +32,26 @@ jobs:
       - name: Checkout code (OTA repo)
         uses: actions/checkout@v4
 
+      - name: Validate repository_dispatch payload
+        run: |
+          if [ -z "${{ github.event.client_payload.commit_sha }}" ]; then
+            echo "ERROR: commit_sha missing from repository_dispatch payload"
+            exit 1
+          fi
+      
+          if [ -z "${{ github.event.client_payload.version }}" ]; then
+            echo "ERROR: version missing from repository_dispatch payload"
+            exit 1
+          fi
+
       - name: Checkout source code (private OmniCAN repo)
         uses: actions/checkout@v4
         with:
           repository: BowerMotorsport/OmniCAN
           token: ${{ secrets.SOURCE_REPO_TOKEN }}
           path: source
-          ref: ${{ github.event.inputs.commit_sha || github.event.repository.default_branch }}
+          ref: ${{ github.event.client_payload.commit_sha }}
+
           persist-credentials: false
 
       - name: Setup Arduino CLI
@@ -63,12 +76,14 @@ jobs:
             --output-dir ../../build \
             OmniCan_Gateway.ino
 
-      - name: Get version from tag or input
+      - name: Get version from dispatch payload
         id: version
         run: |
-          VERSION="${{ github.event.inputs.version || github.ref_name }}"
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building version: $VERSION"
+          if [ -z "${{ github.event.client_payload.version }}" ]; then
+            echo "ERROR: version missing from repository_dispatch payload"
+            exit 1
+          fi
+          echo "VERSION=${{ github.event.client_payload.version }}" >> $GITHUB_OUTPUT
 
       - name: Rename firmware binary
         run: |
